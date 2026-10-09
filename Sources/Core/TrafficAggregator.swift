@@ -34,48 +34,6 @@ public struct TrafficDelta: Equatable, Sendable {
     }
 }
 
-/// 某进程（显示标识）在某区间内的流量合计。
-public struct ProcessTotal: Equatable, Sendable, Identifiable {
-    public let name: String
-    public let parent: String
-    public let command: String
-    public let bytesIn: UInt64
-    public let bytesOut: UInt64
-
-    public init(name: String, bytesIn: UInt64, bytesOut: UInt64, parent: String = "", command: String = "") {
-        self.name = name
-        self.parent = parent
-        self.command = command
-        self.bytesIn = bytesIn
-        self.bytesOut = bytesOut
-    }
-
-    /// 区间内的结果按显示标识分组，因此标识可作唯一键。
-    public var id: String { name }
-
-    public var total: UInt64 {
-        bytesIn &+ bytesOut
-    }
-}
-
-public extension ProcessTotal {
-    /// 排行默认排序：总流量从大到小，最快看到流量大户。
-    static var defaultSortOrder: [KeyPathComparator<ProcessTotal>] {
-        [KeyPathComparator(\.total, order: .reverse)]
-    }
-
-    /// 供界面切换排序使用的字段集合。
-    static var sortableComparators: [KeyPathComparator<ProcessTotal>] {
-        [
-            KeyPathComparator(\.name),
-            KeyPathComparator(\.parent),
-            KeyPathComparator(\.bytesIn, order: .reverse),
-            KeyPathComparator(\.bytesOut, order: .reverse),
-            KeyPathComparator(\.total, order: .reverse),
-        ]
-    }
-}
-
 /// 把 nettop 的累计值换算成「本轮新增」。
 ///
 /// nettop 给出的是进程自启动以来的累计字节，因此需要保存上一轮快照做差值：

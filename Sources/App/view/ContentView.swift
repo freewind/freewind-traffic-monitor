@@ -3,21 +3,16 @@ import TrafficMonitorCore
 
 struct ContentView: View {
     @ObservedObject var model: TrafficViewModel
-    @State private var sortOrder: [KeyPathComparator<ProcessTotal>] = ProcessTotal.defaultSortOrder
-
-    private var sortedRows: [ProcessTotal] {
-        model.visibleRows.sorted(using: sortOrder)
-    }
 
     var body: some View {
         VStack(spacing: 0) {
             toolbar
             Divider()
-            table
+            ProcessTableView(model: model)
             Divider()
             footer
         }
-        .frame(minWidth: 680, minHeight: 420)
+        .frame(minWidth: 900, minHeight: 440)
         .onAppear { model.refresh() }
     }
 
@@ -42,9 +37,13 @@ struct ContentView: View {
                     .font(.system(.body, design: .monospaced))
                     .foregroundStyle(.secondary)
 
-                Button("刷新") {
-                    model.refresh()
-                }
+                Button("复制选中") { model.copySelection() }
+                    .help("复制当前选中行（快捷键 ⇧⌘C；⌘C 用于复制拖选的文字）")
+                    .keyboardShortcut("c", modifiers: [.command, .shift])
+
+                Button("复制全部") { model.copyAll() }
+
+                Button("刷新") { model.refresh() }
             }
 
             if model.rangeKind == .custom {
@@ -60,41 +59,13 @@ struct ContentView: View {
         .padding(12)
     }
 
-    private var table: some View {
-        Table(sortedRows, sortOrder: $sortOrder) {
-            TableColumn("进程", value: \.name)
-                .width(min: 200, ideal: 280)
-
-            TableColumn("父进程", value: \.parent)
-                .width(min: 100, ideal: 130)
-
-            TableColumn("上传", value: \.bytesIn) { row in
-                Text(ByteFormat.size(row.bytesIn))
-                    .monospacedDigit()
-            }
-            .width(min: 90, ideal: 110)
-
-            TableColumn("下载", value: \.bytesOut) { row in
-                Text(ByteFormat.size(row.bytesOut))
-                    .monospacedDigit()
-            }
-            .width(min: 90, ideal: 110)
-
-            TableColumn("总计", value: \.total) { row in
-                Text(ByteFormat.size(row.total))
-                    .monospacedDigit()
-            }
-            .width(min: 90, ideal: 110)
-        }
-    }
-
     private var footer: some View {
         HStack(spacing: 12) {
             if let lastError = model.lastError {
                 Text(lastError)
                     .foregroundStyle(.red)
             } else {
-                Text("共 \(sortedRows.count) 个进程")
+                Text("共 \(model.visibleGroups.count) 个进程")
                 if model.ignoreProxyProcesses, model.hiddenProcessCount > 0 {
                     Text("（已隐藏 \(model.hiddenProcessCount) 个代理进程）")
                         .foregroundStyle(.secondary)

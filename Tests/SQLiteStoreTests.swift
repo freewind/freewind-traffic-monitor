@@ -7,24 +7,34 @@ final class SQLiteStoreTests: XCTestCase {
         try SQLiteStore(path: ":memory:")
     }
 
-    func testRecordAndAggregateByProcess() throws {
+    private func breakdown(
+        _ label: String,
+        parent: String = "",
+        command: String = "",
+        bytesIn: UInt64 = 0,
+        bytesOut: UInt64 = 0
+    ) -> ProcessBreakdown {
+        ProcessBreakdown(label: label, parent: parent, command: command, bytesIn: bytesIn, bytesOut: bytesOut)
+    }
+
+    func testGroupedTotalsAggregateByProcessName() throws {
         let store = try makeStore()
 
         try store.record([
-            TrafficDelta(timestamp: 100, name: "node", pid: 1, bytesIn: 10, bytesOut: 10),
-            TrafficDelta(timestamp: 200, name: "node", pid: 1, bytesIn: 5, bytesOut: 5),
-            TrafficDelta(timestamp: 200, name: "curl", pid: 2, bytesIn: 1, bytesOut: 50),
+            TrafficDelta(timestamp: 100, name: "node", pid: 1, bytesIn: 10, bytesOut: 10, label: "node · a.js"),
+            TrafficDelta(timestamp: 200, name: "node", pid: 2, bytesIn: 5, bytesOut: 5, label: "node · b.js"),
+            TrafficDelta(timestamp: 200, name: "curl", pid: 3, bytesIn: 1, bytesOut: 50, label: "curl"),
         ])
 
-        let totals = try store.totals(from: 0, to: 1_000)
+        let groups = try store.groupedTotals(from: 0, to: 1_000)
 
-        XCTAssertEqual(totals.count, 2)
-        XCTAssertEqual(totals[0], ProcessTotal(name: "curl", bytesIn: 1, bytesOut: 50))
-        XCTAssertEqual(totals[1], ProcessTotal(name: "node", bytesIn: 15, bytesOut: 15))
-        XCTAssertEqual(totals[0].total, 51)
+        XCTAssertEqual(groups.map(\.name), ["curl", "node"])
+        XCTAssertEqual(groups[1].bytesIn, 15)
+        XCTAssertEqual(groups[1].bytesOut, 15)
+        XCTAssertEqual(groups[1].children.map(\.label).sorted(), ["node · a.js", "node · b.js"])
     }
 
-    func testRangeIsHalfOpen() throws {
+    func testGroupedTotalsRangeIsHalfOpen() throws {
         let store = try makeStore()
 
         try store.record([
@@ -34,50 +44,13 @@ final class SQLiteStoreTests: XCTestCase {
             TrafficDelta(timestamp: 200, name: "after", pid: 3, bytesIn: 40, bytesOut: 0),
         ])
 
-        let totals = try store.totals(from: 100, to: 200)
+        let groups = try store.groupedTotals(from: 100, to: 200)
 
-        XCTAssertEqual(totals.count, 1)
-        XCTAssertEqual(totals[0], ProcessTotal(name: "inside", bytesIn: 50, bytesOut: 0))
+        XCTAssertEqual(groups.map(\.name), ["inside"])
+        XCTAssertEqual(groups[0].bytesIn, 50)
     }
 
-    func testLargeCountersSurviveRoundTrip() throws {
-        let store = try makeStore()
-        let big: UInt64 = 9_000_000_000
-
-        try store.record([
-            TrafficDelta(timestamp: 1, name: "curl", pid: 1, bytesIn: big, bytesOut: big)
-        ])
-
-        let totals = try store.totals(from: 0, to: 10)
-
-        XCTAssertEqual(totals[0].bytesIn, big)
-        XCTAssertEqual(totals[0].bytesOut, big)
-    }
-
-    func testEmptyRecordWritesNothing() throws {
-        let store = try makeStore()
-
-        try store.record([])
-
-        XCTAssertEqual(try store.sampleCount(), 0)
-    }
-
-    /// 写入真实文件并重新打开，便于用外部 sqlite3 工具核对落盘结果。
-    func testTotalsGroupByDisplayLabel() throws {
-        let store = try makeStore()
-
-        try store.record([
-            TrafficDelta(timestamp: 1, name: "node", pid: 1, bytesIn: 100, bytesOut: 0, label: "node · a.js"),
-            TrafficDelta(timestamp: 1, name: "node", pid: 2, bytesIn: 300, bytesOut: 0, label: "node · b.js"),
-        ])
-
-        let totals = try store.totals(from: 0, to: 10)
-
-        XCTAssertEqual(totals.map(\.name), ["node · b.js", "node · a.js"])
-        XCTAssertEqual(totals[0].bytesIn, 300)
-    }
-
-    func testStoresCommandAndParent() throws {
+    func testChildrenCarryCommandAndParent() throws {
         let store = try makeStore()
 
         try store.record([
@@ -93,10 +66,48 @@ final class SQLiteStoreTests: XCTestCase {
             )
         ])
 
-        let totals = try store.totals(from: 0, to: 10)
+        let children = try store.groupedTotals(from: 0, to: 10)[0].children
 
-        XCTAssertEqual(totals[0].parent, "zed")
-        XCTAssertEqual(totals[0].command, "node /x/tsserver.js")
+        XCTAssertEqual(children.count, 1)
+        XCTAssertEqual(children[0].parent, "zed")
+        XCTAssertEqual(children[0].command, "node /x/tsserver.js")
+        XCTAssertEqual(children[0].scriptName, "tsserver.js")
+    }
+
+    func testLegacyRowsWithoutLabelFallBackToName() throws {
+        let store = try makeStore()
+
+        try store.record([
+            TrafficDelta(timestamp: 1, name: "node", pid: 1, bytesIn: 7, bytesOut: 0, label: "")
+        ])
+
+        let group = try store.groupedTotals(from: 0, to: 10)[0]
+
+        XCTAssertEqual(group.name, "node")
+        XCTAssertEqual(group.children.map(\.label), ["node"])
+        XCTAssertFalse(group.isExpandable)
+    }
+
+    func testLargeCountersSurviveRoundTrip() throws {
+        let store = try makeStore()
+        let big: UInt64 = 9_000_000_000
+
+        try store.record([
+            TrafficDelta(timestamp: 1, name: "curl", pid: 1, bytesIn: big, bytesOut: big)
+        ])
+
+        let group = try store.groupedTotals(from: 0, to: 10)[0]
+
+        XCTAssertEqual(group.bytesIn, big)
+        XCTAssertEqual(group.bytesOut, big)
+    }
+
+    func testEmptyRecordWritesNothing() throws {
+        let store = try makeStore()
+
+        try store.record([])
+
+        XCTAssertEqual(try store.sampleCount(), 0)
     }
 
     /// 老版本数据库没有 label/command/parent 列，升级后应自动补列并把 label 回填为进程名。
@@ -125,13 +136,14 @@ final class SQLiteStoreTests: XCTestCase {
         let columns = try store.columnNames()
         XCTAssertTrue(columns.isSuperset(of: ["label", "command", "parent"]))
 
-        let totals = try store.totals(from: 0, to: 200)
-        XCTAssertEqual(totals.count, 1)
-        XCTAssertEqual(totals[0].name, "node")
-        XCTAssertEqual(totals[0].bytesIn, 1_000)
-        XCTAssertEqual(totals[0].bytesOut, 2_000)
+        let groups = try store.groupedTotals(from: 0, to: 200)
+        XCTAssertEqual(groups.count, 1)
+        XCTAssertEqual(groups[0].name, "node")
+        XCTAssertEqual(groups[0].bytesIn, 1_000)
+        XCTAssertEqual(groups[0].bytesOut, 2_000)
     }
 
+    /// 写入真实文件并重新打开，便于用外部 sqlite3 工具核对落盘结果。
     func testWritesRealFileAndPersists() throws {
         let path = "/tmp/freewind-traffic-monitor-test.sqlite3"
         try? FileManager.default.removeItem(atPath: path)
@@ -147,15 +159,19 @@ final class SQLiteStoreTests: XCTestCase {
 
         let reopened = try SQLiteStore(path: path)
         XCTAssertEqual(try reopened.sampleCount(), 2)
-        let totals = try reopened.totals(from: 0, to: 2_000)
-        XCTAssertEqual(totals[0].name, "verge-mihomo")
-        XCTAssertEqual(totals[1].name, "curl")
+        let groups = try reopened.groupedTotals(from: 0, to: 2_000)
+        XCTAssertEqual(groups.map(\.name), ["verge-mihomo", "curl"])
     }
 
-    func testDefaultPathIsStable() throws {        let first = try SQLiteStore.defaultPath()
+    func testDefaultPathIsStable() throws {
+        let first = try SQLiteStore.defaultPath()
         let second = try SQLiteStore.defaultPath()
 
         XCTAssertEqual(first, second)
         XCTAssertTrue(first.hasSuffix("freewind-traffic-monitor/traffic.sqlite3"))
+    }
+
+    func testUnusedBreakdownHelperMatchesInitializer() {
+        XCTAssertEqual(breakdown("x").label, "x")
     }
 }

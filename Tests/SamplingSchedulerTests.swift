@@ -19,12 +19,12 @@ final class SamplingSchedulerTests: XCTestCase {
         )
 
         scheduler.flush()
-        XCTAssertEqual(try store.totals(from: 0, to: 1_000).first?.bytesIn, 1_000)
+        XCTAssertEqual(try store.groupedTotals(from: 0, to: 1_000).first?.bytesIn, 1_000)
 
         currentBytes = 4_000
         timestamp = 20
         scheduler.flush()
-        XCTAssertEqual(try store.totals(from: 0, to: 1_000).first?.bytesIn, 4_000)
+        XCTAssertEqual(try store.groupedTotals(from: 0, to: 1_000).first?.bytesIn, 4_000)
 
         currentBytes = 4_000
         timestamp = 30

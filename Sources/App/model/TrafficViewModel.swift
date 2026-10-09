@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import TrafficMonitorCore
 
 @MainActor
@@ -23,8 +24,10 @@ final class TrafficViewModel: ObservableObject {
     @Published var customStart = Calendar.current.startOfDay(for: Date().addingTimeInterval(-6 * 86_400))
     @Published var customEnd = Date()
     @Published var ignoreProxyProcesses = true
+    @Published var expandedNames: Set<String> = []
+    @Published var selectedRowID: String?
 
-    @Published private(set) var rows: [ProcessTotal] = []
+    @Published private(set) var groups: [ProcessGroup] = []
     @Published private(set) var downloadRate: Double = 0
     @Published private(set) var uploadRate: Double = 0
     @Published private(set) var lastError: String?
@@ -32,25 +35,26 @@ final class TrafficViewModel: ObservableObject {
 
     private let store: SQLiteStore?
     private var lastSampleTimestamp: Int64?
+    private var selectedRowText = ""
 
     init(store: SQLiteStore?) {
         self.store = store
     }
 
-    var visibleRows: [ProcessTotal] {
-        ProxyProcessFilter.visible(rows, enabled: ignoreProxyProcesses)
+    var visibleGroups: [ProcessGroup] {
+        ProxyProcessFilter.visible(groups, enabled: ignoreProxyProcesses)
     }
 
     var hiddenProcessCount: Int {
-        rows.count - visibleRows.count
+        groups.count - visibleGroups.count
     }
 
     var totalBytesIn: UInt64 {
-        visibleRows.reduce(0) { $0 &+ $1.bytesIn }
+        visibleGroups.reduce(0) { $0 &+ $1.bytesIn }
     }
 
     var totalBytesOut: UInt64 {
-        visibleRows.reduce(0) { $0 &+ $1.bytesOut }
+        visibleGroups.reduce(0) { $0 &+ $1.bytesOut }
     }
 
     var totalBytes: UInt64 {
@@ -93,7 +97,7 @@ final class TrafficViewModel: ObservableObject {
 
         do {
             let (from, to) = timeBounds()
-            rows = try store.totals(from: from, to: to)
+            groups = try store.groupedTotals(from: from, to: to)
             lastError = nil
             lastRefresh = Date()
         } catch {
@@ -105,6 +109,50 @@ final class TrafficViewModel: ObservableObject {
         downloadRate = 0
         uploadRate = 0
         lastSampleTimestamp = nil
+    }
+
+    func isExpanded(_ group: ProcessGroup) -> Bool {
+        expandedNames.contains(group.name)
+    }
+
+    func toggleExpansion(_ group: ProcessGroup) {
+        if expandedNames.contains(group.name) {
+            expandedNames.remove(group.name)
+        } else {
+            expandedNames.insert(group.name)
+        }
+    }
+
+    func select(id: String, text: String) {
+        selectedRowID = id
+        selectedRowText = text
+    }
+
+    func copy(_ text: String) {
+        guard !text.isEmpty else {
+            return
+        }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+    }
+
+    func copyCommand(of group: ProcessGroup) {
+        copy(group.children.map(\.command).filter { !$0.isEmpty }.joined(separator: "\n"))
+    }
+
+    func copyRow(_ text: String) {
+        copy(text)
+    }
+
+    func copyAll() {
+        var text = ProcessRowFormatter.header + "\n"
+        text += ProcessRowFormatter.text(for: visibleGroups, expandedNames: expandedNames)
+        copy(text)
+    }
+
+    func copySelection() {
+        copy(selectedRowText)
     }
 
     /// 左闭右开区间 [from, to)。

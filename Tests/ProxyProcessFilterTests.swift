@@ -2,36 +2,24 @@ import XCTest
 @testable import TrafficMonitorCore
 
 final class ProxyProcessFilterTests: XCTestCase {
-    private let rows = [
-        ProcessTotal(name: "verge-mihomo", bytesIn: 999, bytesOut: 999),
-        ProcessTotal(name: "curl", bytesIn: 10, bytesOut: 1),
-        ProcessTotal(name: "clash", bytesIn: 5, bytesOut: 5),
-    ]
+    private func group(_ name: String) -> ProcessGroup {
+        ProcessGroup(
+            name: name,
+            children: [ProcessBreakdown(label: name, parent: "", command: name, bytesIn: 1, bytesOut: 1)]
+        )
+    }
+
+    private var groups: [ProcessGroup] { [group("verge-mihomo"), group("curl"), group("clash")] }
 
     func testFiltersProxyProcessesByDefault() {
-        let visible = ProxyProcessFilter.visible(rows)
-
-        XCTAssertEqual(visible.map(\.name), ["curl"])
+        XCTAssertEqual(ProxyProcessFilter.visible(groups).map(\.name), ["curl"])
     }
 
     func testDisabledFilterKeepsEverything() {
-        let visible = ProxyProcessFilter.visible(rows, enabled: false)
-
-        XCTAssertEqual(visible.count, 3)
-    }
-
-    func testFiltersProxyProcessWithScriptSuffix() {
-        let labeled = [
-            ProcessTotal(name: "verge-mihomo · index.js", bytesIn: 10, bytesOut: 10),
-            ProcessTotal(name: "curl", bytesIn: 1, bytesOut: 1),
-        ]
-
-        XCTAssertEqual(ProxyProcessFilter.visible(labeled).map(\.name), ["curl"])
+        XCTAssertEqual(ProxyProcessFilter.visible(groups, enabled: false).count, 3)
     }
 
     func testCustomIgnoreList() {
-        let visible = ProxyProcessFilter.visible(rows, ignoring: ["curl"])
-
-        XCTAssertEqual(visible.map(\.name), ["verge-mihomo", "clash"])
+        XCTAssertEqual(ProxyProcessFilter.visible(groups, ignoring: ["curl"]).map(\.name), ["verge-mihomo", "clash"])
     }
 }

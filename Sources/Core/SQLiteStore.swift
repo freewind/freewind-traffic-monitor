@@ -100,22 +100,22 @@ public final class SQLiteStore: @unchecked Sendable {
         }
     }
 
-    /// 区间内的进程流量合计，按显示标识分组、总流量降序。
-    /// 区间为左闭右开：[from, to)。
-    public func totals(from: Int64, to: Int64) throws -> [ProcessTotal] {
+    /// 按进程名聚合的总量，并附带该进程名下的细分明细（脚本 + 启动者）。
+    public func groupedTotals(from: Int64, to: Int64) throws -> [ProcessGroup] {
         lock.lock()
         defer { lock.unlock() }
 
         let statement = try prepare(
             """
-            SELECT COALESCE(NULLIF(label, ''), name) AS display,
-                   MAX(parent),
+            SELECT name,
+                   COALESCE(NULLIF(label, ''), name) AS display,
+                   parent,
                    MAX(command),
                    SUM(bytes_in),
                    SUM(bytes_out)
             FROM traffic
             WHERE ts >= ? AND ts < ?
-            GROUP BY display
+            GROUP BY name, display, parent
             ORDER BY SUM(bytes_in) + SUM(bytes_out) DESC;
             """
         )
@@ -124,25 +124,36 @@ public final class SQLiteStore: @unchecked Sendable {
         sqlite3_bind_int64(statement, 1, from)
         sqlite3_bind_int64(statement, 2, to)
 
-        var result: [ProcessTotal] = []
+        var order: [String] = []
+        var breakdowns: [String: [ProcessBreakdown]] = [:]
+
         while sqlite3_step(statement) == SQLITE_ROW {
             let name = sqlite3_column_text(statement, 0).map { String(cString: $0) } ?? ""
-            let parent = sqlite3_column_text(statement, 1).map { String(cString: $0) } ?? ""
-            let command = sqlite3_column_text(statement, 2).map { String(cString: $0) } ?? ""
-            let bytesIn = UInt64(bitPattern: sqlite3_column_int64(statement, 3))
-            let bytesOut = UInt64(bitPattern: sqlite3_column_int64(statement, 4))
-            result.append(
-                ProcessTotal(
-                    name: name,
-                    bytesIn: bytesIn,
-                    bytesOut: bytesOut,
+            let display = sqlite3_column_text(statement, 1).map { String(cString: $0) } ?? ""
+            let parent = sqlite3_column_text(statement, 2).map { String(cString: $0) } ?? ""
+            let command = sqlite3_column_text(statement, 3).map { String(cString: $0) } ?? ""
+            let bytesIn = UInt64(bitPattern: sqlite3_column_int64(statement, 4))
+            let bytesOut = UInt64(bitPattern: sqlite3_column_int64(statement, 5))
+
+            if breakdowns[name] == nil {
+                order.append(name)
+                breakdowns[name] = []
+            }
+
+            breakdowns[name]?.append(
+                ProcessBreakdown(
+                    label: display,
                     parent: parent,
-                    command: command
+                    command: command,
+                    bytesIn: bytesIn,
+                    bytesOut: bytesOut
                 )
             )
         }
 
-        return result
+        return order.map { name in
+            ProcessGroup(name: name, children: breakdowns[name] ?? [])
+        }
     }
 
     public func sampleCount() throws -> Int {

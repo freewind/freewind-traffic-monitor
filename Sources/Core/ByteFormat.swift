@@ -1,14 +1,14 @@
 import Foundation
 
 /// 流量的可读格式化，统一使用 1000 进制（与运营商计费口径一致）。
-enum ByteFormat {
+public enum ByteFormat {
     private static let units = ["B", "KB", "MB", "GB", "TB"]
 
-    static func size(_ bytes: UInt64) -> String {
+    public static func size(_ bytes: UInt64) -> String {
         format(Double(bytes))
     }
 
-    static func rate(_ bytesPerSecond: Double) -> String {
+    public static func rate(_ bytesPerSecond: Double) -> String {
         format(bytesPerSecond) + "/s"
     }
 
