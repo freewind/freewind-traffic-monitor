@@ -2,7 +2,9 @@ import Foundation
 import SQLite3
 
 /// 采样结果的持久化存储（系统自带 SQLite，无第三方依赖）。
-public final class SQLiteStore {
+///
+/// 采样线程写入与界面线程查询会并发访问同一个连接，因此所有公开方法都用锁串行化。
+public final class SQLiteStore: @unchecked Sendable {
     public enum StoreError: Error, CustomStringConvertible {
         case openFailed(String)
         case executeFailed(String)
@@ -20,6 +22,7 @@ public final class SQLiteStore {
     private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
     private var db: OpaquePointer?
+    private let lock = NSLock()
 
     public init(path: String) throws {
         var handle: OpaquePointer?
@@ -45,6 +48,7 @@ public final class SQLiteStore {
         )
         try execute("CREATE INDEX IF NOT EXISTS idx_traffic_ts ON traffic (ts);")
         try execute("CREATE INDEX IF NOT EXISTS idx_traffic_name ON traffic (name);")
+        try? execute("PRAGMA journal_mode=WAL;")
     }
 
     deinit {
@@ -68,6 +72,9 @@ public final class SQLiteStore {
         guard !deltas.isEmpty else {
             return
         }
+
+        lock.lock()
+        defer { lock.unlock() }
 
         try execute("BEGIN IMMEDIATE TRANSACTION;")
         do {
@@ -100,6 +107,9 @@ public final class SQLiteStore {
     /// 区间内的进程流量合计，按总流量降序。
     /// 区间为左闭右开：[from, to)。
     public func totals(from: Int64, to: Int64) throws -> [ProcessTotal] {
+        lock.lock()
+        defer { lock.unlock() }
+
         let statement = try prepare(
             """
             SELECT name, SUM(bytes_in), SUM(bytes_out)
@@ -126,6 +136,9 @@ public final class SQLiteStore {
     }
 
     public func sampleCount() throws -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+
         let statement = try prepare("SELECT COUNT(*) FROM traffic;")
         defer { sqlite3_finalize(statement) }
 

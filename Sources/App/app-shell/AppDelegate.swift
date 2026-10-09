@@ -1,4 +1,5 @@
-import AppKit
+import Foundation
+import Combine
 import SwiftUI
 import TrafficMonitorCore
 
@@ -8,12 +9,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow?
     private var store: SQLiteStore?
     private var scheduler: SamplingScheduler?
+    private var model: TrafficViewModel?
     private var signalSources: [DispatchSourceSignal] = []
+    private var cancellables: Set<AnyCancellable> = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        let store = makeStore()
+        let model = TrafficViewModel(store: store)
+        self.store = store
+        self.model = model
+
         setupStatusItem()
+        observeRates(model)
         installSignalHandlers()
-        startSampling()
+        startSampling(store: store, model: model)
+
+        // 便于自动化验证：启动时直接打开主窗口。
+        if ProcessInfo.processInfo.environment["TM_OPEN_WINDOW"] == "1" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                self?.showWindow()
+            }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -25,13 +41,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         false
     }
 
+    private func makeStore() -> SQLiteStore? {
+        do {
+            return try SQLiteStore(path: SQLiteStore.defaultPath())
+        } catch {
+            FileHandle.standardError.write(Data("无法打开数据库: \(error)\n".utf8))
+            return nil
+        }
+    }
+
     private func setupStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = item.button {
-            let image = NSImage(systemSymbolName: "network", accessibilityDescription: "Traffic Monitor")
-            image?.isTemplate = true
-            button.image = image
-            button.imagePosition = .imageLeading
             button.title = "TM"
             button.toolTip = "freewind-traffic-monitor"
         }
@@ -71,20 +92,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func startSampling() {
-        do {
-            let store = try SQLiteStore(path: SQLiteStore.defaultPath())
-            let interval = ProcessInfo.processInfo.environment["TM_INTERVAL"].flatMap(Double.init) ?? 5
-            let scheduler = SamplingScheduler(store: store, interval: interval)
-            scheduler.onError = { error in
-                FileHandle.standardError.write(Data("采样失败: \(error)\n".utf8))
+    private func observeRates(_ model: TrafficViewModel) {
+        model.$downloadRate
+            .combineLatest(model.$uploadRate)
+            .sink { [weak self] download, upload in
+                self?.statusItem?.button?.title =
+                    "↓\(ByteFormat.rate(download)) ↑\(ByteFormat.rate(upload))"
             }
-            scheduler.start()
-            self.store = store
-            self.scheduler = scheduler
-        } catch {
-            FileHandle.standardError.write(Data("无法打开数据库: \(error)\n".utf8))
+            .store(in: &cancellables)
+    }
+
+    private func startSampling(store: SQLiteStore?, model: TrafficViewModel) {
+        guard let store else {
+            return
         }
+
+        let interval = ProcessInfo.processInfo.environment["TM_INTERVAL"].flatMap(Double.init) ?? 5
+        let scheduler = SamplingScheduler(store: store, interval: interval)
+        scheduler.onError = { error in
+            FileHandle.standardError.write(Data("采样失败: \(error)\n".utf8))
+        }
+        scheduler.onSample = { sample in
+            Task { @MainActor in
+                model.apply(sample, interval: interval)
+            }
+        }
+        scheduler.start()
+        self.scheduler = scheduler
     }
 
     private func showWindow() {
@@ -94,8 +128,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        guard let model else {
+            return
+        }
+
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 760, height: 460),
+            contentRect: NSRect(x: 0, y: 0, width: 860, height: 520),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
@@ -103,7 +141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.center()
         window.title = "freewind-traffic-monitor"
         window.isReleasedWhenClosed = false
-        window.contentView = NSHostingView(rootView: ContentView())
+        window.contentView = NSHostingView(rootView: ContentView(model: model))
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         self.window = window

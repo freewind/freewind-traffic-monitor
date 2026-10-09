@@ -18,10 +18,13 @@ public struct TrafficDelta: Equatable, Sendable {
 }
 
 /// 某进程在某区间内的流量合计。
-public struct ProcessTotal: Equatable, Sendable {
+public struct ProcessTotal: Equatable, Sendable, Identifiable {
     public let name: String
     public let bytesIn: UInt64
     public let bytesOut: UInt64
+
+    /// 区间内的结果按进程名分组，因此进程名可作唯一标识。
+    public var id: String { name }
 
     public init(name: String, bytesIn: UInt64, bytesOut: UInt64) {
         self.name = name
@@ -31,6 +34,23 @@ public struct ProcessTotal: Equatable, Sendable {
 
     public var total: UInt64 {
         bytesIn &+ bytesOut
+    }
+}
+
+public extension ProcessTotal {
+    /// 排行默认排序：总流量从大到小，最快看到流量大户。
+    static var defaultSortOrder: [KeyPathComparator<ProcessTotal>] {
+        [KeyPathComparator(\.total, order: .reverse)]
+    }
+
+    /// 供界面切换排序使用的字段集合。
+    static var sortableComparators: [KeyPathComparator<ProcessTotal>] {
+        [
+            KeyPathComparator(\.name),
+            KeyPathComparator(\.bytesIn, order: .reverse),
+            KeyPathComparator(\.bytesOut, order: .reverse),
+            KeyPathComparator(\.total, order: .reverse),
+        ]
     }
 }
 
