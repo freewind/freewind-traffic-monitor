@@ -10,6 +10,13 @@ struct ProcessTableView: View {
     @ObservedObject var model: TrafficViewModel
     @State private var sortField: SortField = .total
     @State private var ascending = false
+    @State private var killRequest: KillRequest?
+
+    struct KillRequest: Identifiable {
+        let id = UUID()
+        let title: String
+        let pids: [Int32]
+    }
 
     enum SortField: String, CaseIterable {
         case name
@@ -30,9 +37,9 @@ struct ProcessTableView: View {
 
         var width: CGFloat {
             switch self {
-            case .name: return 260
-            case .parent: return 110
-            case .bytesIn, .bytesOut, .total: return 95
+            case .name: return 230
+            case .parent: return 100
+            case .bytesIn, .bytesOut, .total: return 90
             }
         }
 
@@ -45,6 +52,8 @@ struct ProcessTableView: View {
     }
 
     private let indentWidth: CGFloat = 18
+    private let pidWidth: CGFloat = 110
+    private let statusWidth: CGFloat = 84
 
     var body: some View {
         VStack(spacing: 0) {
@@ -65,6 +74,24 @@ struct ProcessTableView: View {
             }
             .textSelection(.enabled)
         }
+        .alert("结束进程", isPresented: killAlertBinding, presenting: killRequest) { request in
+            Button("结束", role: .destructive) {
+                model.terminate(pids: request.pids)
+                killRequest = nil
+            }
+            Button("取消", role: .cancel) {
+                killRequest = nil
+            }
+        } message: { request in
+            Text("\(request.title)\n将结束 \(request.pids.count) 个进程：\(request.pids.map(String.init).joined(separator: ", "))")
+        }
+    }
+
+    private var killAlertBinding: Binding<Bool> {
+        Binding(
+            get: { killRequest != nil },
+            set: { if !$0 { killRequest = nil } }
+        )
     }
 
     private var sortedGroups: [ProcessGroup] {
@@ -131,6 +158,14 @@ struct ProcessTableView: View {
                 .buttonStyle(.plain)
             }
 
+            Text("PID")
+                .font(.callout.weight(.semibold))
+                .frame(width: pidWidth, alignment: .leading)
+
+            Text("状态")
+                .font(.callout.weight(.semibold))
+                .frame(width: statusWidth, alignment: .leading)
+
             Text("命令")
                 .font(.callout.weight(.semibold))
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -141,6 +176,10 @@ struct ProcessTableView: View {
 
     private func groupRow(_ group: ProcessGroup) -> some View {
         let id = group.name
+        let runningPIDs = group.children
+            .filter { $0.isRunning(activePIDs: model.activePIDs) }
+            .flatMap(\.pids)
+
         return rowContent(
             selected: model.selectedRowID == id,
             expandable: group.isExpandable,
@@ -149,22 +188,39 @@ struct ProcessTableView: View {
             name: group.name,
             nameWeight: .semibold,
             parent: "",
+            pidText: group.pidSummaryText,
+            statusText: group.statusText(activePIDs: model.activePIDs),
+            isRunning: !runningPIDs.isEmpty,
             bytesIn: group.bytesIn,
             bytesOut: group.bytesOut,
             total: group.total,
             command: group.summaryCommand
         )
-        .onTapGesture {
-            model.select(id: id, text: ProcessRowFormatter.text(for: group))
-        }
+        .simultaneousGesture(
+            TapGesture().onEnded {
+                model.select(
+                    id: id,
+                    text: ProcessRowFormatter.text(for: group, activePIDs: model.activePIDs)
+                )
+            }
+        )
         .contextMenu {
             Button("复制命令") { model.copyCommand(of: group) }
-            Button("复制整行") { model.copyRow(ProcessRowFormatter.text(for: group)) }
+            Button("复制整行") {
+                model.copyRow(ProcessRowFormatter.text(for: group, activePIDs: model.activePIDs))
+            }
+            Divider()
+            Button("结束进程") {
+                killRequest = KillRequest(title: "进程：\(group.name)", pids: runningPIDs)
+            }
+            .disabled(runningPIDs.isEmpty)
         }
     }
 
     private func childRow(group: ProcessGroup, child: ProcessBreakdown) -> some View {
         let id = group.name + "\u{1}" + child.id
+        let isRunning = child.isRunning(activePIDs: model.activePIDs)
+
         return rowContent(
             selected: model.selectedRowID == id,
             expandable: false,
@@ -173,18 +229,33 @@ struct ProcessTableView: View {
             name: child.scriptName,
             nameWeight: .regular,
             parent: child.parent,
+            pidText: child.pidText,
+            statusText: child.statusText(activePIDs: model.activePIDs),
+            isRunning: isRunning,
             bytesIn: child.bytesIn,
             bytesOut: child.bytesOut,
             total: child.total,
             command: child.command,
             indent: indentWidth
         )
-        .onTapGesture {
-            model.select(id: id, text: ProcessRowFormatter.text(for: child))
-        }
+        .simultaneousGesture(
+            TapGesture().onEnded {
+                model.select(
+                    id: id,
+                    text: ProcessRowFormatter.text(for: child, activePIDs: model.activePIDs)
+                )
+            }
+        )
         .contextMenu {
             Button("复制命令") { model.copy(child.command) }
-            Button("复制整行") { model.copyRow(ProcessRowFormatter.text(for: child)) }
+            Button("复制整行") {
+                model.copyRow(ProcessRowFormatter.text(for: child, activePIDs: model.activePIDs))
+            }
+            Divider()
+            Button("结束进程") {
+                killRequest = KillRequest(title: "脚本：\(child.scriptName)", pids: child.pids)
+            }
+            .disabled(!isRunning)
         }
     }
 
@@ -196,6 +267,9 @@ struct ProcessTableView: View {
         name: String,
         nameWeight: Font.Weight,
         parent: String,
+        pidText: String,
+        statusText: String,
+        isRunning: Bool,
         bytesIn: UInt64,
         bytesOut: UInt64,
         total: UInt64,
@@ -229,6 +303,18 @@ struct ProcessTableView: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .frame(width: SortField.parent.width, alignment: .leading)
+
+            Text(pidText)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+                .lineLimit(1)
+                .frame(width: pidWidth, alignment: .leading)
+
+            Text(statusText)
+                .font(.caption)
+                .foregroundStyle(isRunning ? Color.green : Color.secondary)
+                .lineLimit(1)
+                .frame(width: statusWidth, alignment: .leading)
 
             Text(ByteFormat.size(bytesIn))
                 .monospacedDigit()

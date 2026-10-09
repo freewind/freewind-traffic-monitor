@@ -6,10 +6,18 @@ final class ProcessGroupTests: XCTestCase {
         _ label: String,
         parent: String = "",
         command: String = "",
+        pids: [Int32] = [],
         bytesIn: UInt64 = 0,
         bytesOut: UInt64 = 0
     ) -> ProcessBreakdown {
-        ProcessBreakdown(label: label, parent: parent, command: command, bytesIn: bytesIn, bytesOut: bytesOut)
+        ProcessBreakdown(
+            label: label,
+            parent: parent,
+            command: command,
+            pids: pids,
+            bytesIn: bytesIn,
+            bytesOut: bytesOut
+        )
     }
 
     func testGroupSumsChildren() {
@@ -53,6 +61,30 @@ final class ProcessGroupTests: XCTestCase {
         ])
 
         XCTAssertEqual(group.summaryCommand, "node /b.js")
+    }
+
+    func testStatusAndPIDSummaryUseActivePIDs() {
+        let group = ProcessGroup(name: "node", children: [
+            breakdown("node · a.js", pids: [100]),
+            breakdown("node · b.js", pids: [200, 201]),
+        ])
+
+        XCTAssertEqual(group.pidSummaryText, "3 个")
+        XCTAssertEqual(group.statusText(activePIDs: []), "已退出")
+        XCTAssertEqual(group.statusText(activePIDs: [100]), "运行中 1")
+        XCTAssertEqual(group.statusText(activePIDs: [100, 201]), "运行中 2")
+        XCTAssertEqual(group.runningBreakdownCount(activePIDs: [201]), 1)
+    }
+
+    func testEmptyGroupShowsDashForPID() {
+        XCTAssertEqual(ProcessGroup(name: "gone", children: []).pidSummaryText, "—")
+    }
+
+    func testBreakdownStatusWithoutPIDsIsExited() {
+        let item = breakdown("node · a.js")
+
+        XCTAssertEqual(item.statusText(activePIDs: [1, 2]), "已退出")
+        XCTAssertFalse(item.isRunning(activePIDs: [1, 2]))
     }
 
     func testDefaultSortIsTotalDescending() {

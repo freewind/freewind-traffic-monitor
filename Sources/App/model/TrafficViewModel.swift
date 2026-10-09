@@ -28,10 +28,14 @@ final class TrafficViewModel: ObservableObject {
     @Published var selectedRowID: String?
 
     @Published private(set) var groups: [ProcessGroup] = []
+    /// 本次刷新时刻仍在运行的 pid，用于区分运行中与已退出。
+    @Published private(set) var activePIDs: Set<Int32> = []
     @Published private(set) var downloadRate: Double = 0
     @Published private(set) var uploadRate: Double = 0
     @Published private(set) var lastError: String?
     @Published private(set) var lastRefresh: Date?
+    /// 最近一次操作（如结束进程）的结果提示。
+    @Published var actionMessage: String?
 
     private let store: SQLiteStore?
     private var lastSampleTimestamp: Int64?
@@ -95,6 +99,8 @@ final class TrafficViewModel: ObservableObject {
             return
         }
 
+        activePIDs = (try? ProcessInspector.snapshot()).map { Set($0.keys) } ?? []
+
         do {
             let (from, to) = timeBounds()
             groups = try store.groupedTotals(from: from, to: to)
@@ -147,8 +153,23 @@ final class TrafficViewModel: ObservableObject {
 
     func copyAll() {
         var text = ProcessRowFormatter.header + "\n"
-        text += ProcessRowFormatter.text(for: visibleGroups, expandedNames: expandedNames)
+        text += ProcessRowFormatter.text(
+            for: visibleGroups,
+            expandedNames: expandedNames,
+            activePIDs: activePIDs
+        )
         copy(text)
+    }
+
+    /// 结束进程；全部成功返回 nil，否则返回可直接展示的错误说明。
+    @discardableResult
+    func terminate(pids: [Int32]) -> String? {
+        let outcomes = ProcessKiller.terminate(pids: pids)
+        refresh()
+
+        let error = ProcessKiller.errorMessage(from: outcomes)
+        actionMessage = error ?? "已结束 \(pids.count) 个进程"
+        return error
     }
 
     func copySelection() {

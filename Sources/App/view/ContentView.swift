@@ -61,7 +61,10 @@ struct ContentView: View {
 
     private var footer: some View {
         HStack(spacing: 12) {
-            if let lastError = model.lastError {
+            if let actionMessage = model.actionMessage {
+                Text(actionMessage)
+                    .foregroundStyle(actionMessage.hasPrefix("已结束") ? Color.secondary : Color.red)
+            } else if let lastError = model.lastError {
                 Text(lastError)
                     .foregroundStyle(.red)
             } else {

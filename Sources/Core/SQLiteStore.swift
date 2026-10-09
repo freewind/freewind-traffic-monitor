@@ -111,6 +111,7 @@ public final class SQLiteStore: @unchecked Sendable {
                    COALESCE(NULLIF(label, ''), name) AS display,
                    parent,
                    MAX(command),
+                   GROUP_CONCAT(DISTINCT pid),
                    SUM(bytes_in),
                    SUM(bytes_out)
             FROM traffic
@@ -132,8 +133,14 @@ public final class SQLiteStore: @unchecked Sendable {
             let display = sqlite3_column_text(statement, 1).map { String(cString: $0) } ?? ""
             let parent = sqlite3_column_text(statement, 2).map { String(cString: $0) } ?? ""
             let command = sqlite3_column_text(statement, 3).map { String(cString: $0) } ?? ""
-            let bytesIn = UInt64(bitPattern: sqlite3_column_int64(statement, 4))
-            let bytesOut = UInt64(bitPattern: sqlite3_column_int64(statement, 5))
+            let pidText = sqlite3_column_text(statement, 4).map { String(cString: $0) } ?? ""
+            let bytesIn = UInt64(bitPattern: sqlite3_column_int64(statement, 5))
+            let bytesOut = UInt64(bitPattern: sqlite3_column_int64(statement, 6))
+
+            let pids = pidText
+                .split(separator: ",")
+                .compactMap { Int32($0.trimmingCharacters(in: .whitespaces)) }
+                .sorted()
 
             if breakdowns[name] == nil {
                 order.append(name)
@@ -145,6 +152,7 @@ public final class SQLiteStore: @unchecked Sendable {
                     label: display,
                     parent: parent,
                     command: command,
+                    pids: pids,
                     bytesIn: bytesIn,
                     bytesOut: bytesOut
                 )

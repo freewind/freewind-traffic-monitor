@@ -8,13 +8,23 @@ public struct ProcessBreakdown: Equatable, Sendable, Identifiable {
     public let parent: String
     /// 完整命令行。
     public let command: String
+    /// 该明细对应的进程 id（可能同时有多个实例）。
+    public let pids: [Int32]
     public let bytesIn: UInt64
     public let bytesOut: UInt64
 
-    public init(label: String, parent: String, command: String, bytesIn: UInt64, bytesOut: UInt64) {
+    public init(
+        label: String,
+        parent: String,
+        command: String,
+        pids: [Int32] = [],
+        bytesIn: UInt64,
+        bytesOut: UInt64
+    ) {
         self.label = label
         self.parent = parent
         self.command = command
+        self.pids = pids
         self.bytesIn = bytesIn
         self.bytesOut = bytesOut
     }
@@ -35,6 +45,22 @@ public struct ProcessBreakdown: Equatable, Sendable, Identifiable {
             return label
         }
         return parts.dropFirst().joined(separator: " · ")
+    }
+
+    public var pidText: String {
+        pids.map(String.init).joined(separator: ", ")
+    }
+
+    /// 只要有一个实例还在运行，就算运行中。
+    public func isRunning(activePIDs: Set<Int32>) -> Bool {
+        pids.contains { activePIDs.contains($0) }
+    }
+
+    public func statusText(activePIDs: Set<Int32>) -> String {
+        guard !pids.isEmpty else {
+            return "已退出"
+        }
+        return isRunning(activePIDs: activePIDs) ? "运行中" : "已退出"
     }
 }
 
@@ -83,6 +109,24 @@ public struct ProcessGroup: Equatable, Sendable, Identifiable {
     public var summaryCommand: String {
         children.max { $0.total < $1.total }?.command ?? ""
     }
+
+    public var allPIDs: [Int32] {
+        children.flatMap(\.pids)
+    }
+
+    public var pidSummaryText: String {
+        let count = allPIDs.count
+        return count == 0 ? "—" : "\(count) 个"
+    }
+
+    public func runningBreakdownCount(activePIDs: Set<Int32>) -> Int {
+        children.filter { $0.isRunning(activePIDs: activePIDs) }.count
+    }
+
+    public func statusText(activePIDs: Set<Int32>) -> String {
+        let running = runningBreakdownCount(activePIDs: activePIDs)
+        return running == 0 ? "已退出" : "运行中 \(running)"
+    }
 }
 
 public extension ProcessGroup {
@@ -100,13 +144,21 @@ public extension ProcessGroup {
     }
 }
 
-/// 生成可复制的纯文本行，供界面右键菜单与 Cmd+C 使用。
+/// 生成可复制的纯文本行，供界面右键菜单与快捷键使用。
 public enum ProcessRowFormatter {
-    public static func text(for group: ProcessGroup, indent: String = "") -> String {
+    public static let header = "进程\t启动者\tPID\t状态\t上传\t下载\t总计\t命令"
+
+    public static func text(
+        for group: ProcessGroup,
+        activePIDs: Set<Int32> = [],
+        indent: String = ""
+    ) -> String {
         line(
             indent: indent,
             name: group.name,
             parent: "",
+            pid: group.pidSummaryText,
+            status: group.statusText(activePIDs: activePIDs),
             bytesIn: group.bytesIn,
             bytesOut: group.bytesOut,
             total: group.total,
@@ -114,11 +166,17 @@ public enum ProcessRowFormatter {
         )
     }
 
-    public static func text(for breakdown: ProcessBreakdown, indent: String = "  ") -> String {
+    public static func text(
+        for breakdown: ProcessBreakdown,
+        activePIDs: Set<Int32> = [],
+        indent: String = "  "
+    ) -> String {
         line(
             indent: indent,
             name: breakdown.scriptName,
             parent: breakdown.parent,
+            pid: breakdown.pidText,
+            status: breakdown.statusText(activePIDs: activePIDs),
             bytesIn: breakdown.bytesIn,
             bytesOut: breakdown.bytesOut,
             total: breakdown.total,
@@ -127,23 +185,27 @@ public enum ProcessRowFormatter {
     }
 
     /// 组行加其全部明细，用于「复制全部」。
-    public static func text(for groups: [ProcessGroup], expandedNames: Set<String> = []) -> String {
+    public static func text(
+        for groups: [ProcessGroup],
+        expandedNames: Set<String> = [],
+        activePIDs: Set<Int32> = []
+    ) -> String {
         var lines: [String] = []
         for group in groups {
-            lines.append(text(for: group))
+            lines.append(text(for: group, activePIDs: activePIDs))
             if expandedNames.contains(group.name) {
-                lines.append(contentsOf: group.children.map { text(for: $0) })
+                lines.append(contentsOf: group.children.map { text(for: $0, activePIDs: activePIDs) })
             }
         }
         return lines.joined(separator: "\n")
     }
 
-    public static let header = "进程\t启动者\t上传\t下载\t总计\t命令"
-
     private static func line(
         indent: String,
         name: String,
         parent: String,
+        pid: String,
+        status: String,
         bytesIn: UInt64,
         bytesOut: UInt64,
         total: UInt64,
@@ -152,6 +214,8 @@ public enum ProcessRowFormatter {
         [
             indent + name,
             parent,
+            pid,
+            status,
             ByteFormat.size(bytesIn),
             ByteFormat.size(bytesOut),
             ByteFormat.size(total),
