@@ -1,13 +1,24 @@
 import AppKit
 import SwiftUI
+import TrafficMonitorCore
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var window: NSWindow?
+    private var store: SQLiteStore?
+    private var scheduler: SamplingScheduler?
+    private var signalSources: [DispatchSourceSignal] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusItem()
+        installSignalHandlers()
+        startSampling()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        scheduler?.flush()
+        scheduler?.stop()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -45,6 +56,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func quit() {
         NSApp.terminate(nil)
+    }
+
+    /// 被 kill 或 LaunchAgent 停止时也能正常收尾，把最后一段流量落库。
+    private func installSignalHandlers() {
+        for signalNumber in [SIGTERM, SIGINT] {
+            signal(signalNumber, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: signalNumber, queue: .main)
+            source.setEventHandler {
+                NSApp.terminate(nil)
+            }
+            source.resume()
+            signalSources.append(source)
+        }
+    }
+
+    private func startSampling() {
+        do {
+            let store = try SQLiteStore(path: SQLiteStore.defaultPath())
+            let interval = ProcessInfo.processInfo.environment["TM_INTERVAL"].flatMap(Double.init) ?? 5
+            let scheduler = SamplingScheduler(store: store, interval: interval)
+            scheduler.onError = { error in
+                FileHandle.standardError.write(Data("采样失败: \(error)\n".utf8))
+            }
+            scheduler.start()
+            self.store = store
+            self.scheduler = scheduler
+        } catch {
+            FileHandle.standardError.write(Data("无法打开数据库: \(error)\n".utf8))
+        }
     }
 
     private func showWindow() {
