@@ -55,3 +55,18 @@ swift run
 ```bash
 swift test
 ```
+
+## 安装与开机自启
+
+```bash
+fish scripts/install-autostart.fish
+```
+
+该脚本会构建 .app、安装到 `~/Applications/freewind-traffic-monitor.app`、
+写入 `~/Library/LaunchAgents/com.freewind.traffic-monitor.plist` 并注册登录自启。
+
+取消安装与自启：
+
+```bash
+fish scripts/uninstall-autostart.fish
+```
