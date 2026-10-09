@@ -20,6 +20,15 @@ final class ProxyProcessFilterTests: XCTestCase {
         XCTAssertEqual(visible.count, 3)
     }
 
+    func testFiltersProxyProcessWithScriptSuffix() {
+        let labeled = [
+            ProcessTotal(name: "verge-mihomo · index.js", bytesIn: 10, bytesOut: 10),
+            ProcessTotal(name: "curl", bytesIn: 1, bytesOut: 1),
+        ]
+
+        XCTAssertEqual(ProxyProcessFilter.visible(labeled).map(\.name), ["curl"])
+    }
+
     func testCustomIgnoreList() {
         let visible = ProxyProcessFilter.visible(rows, ignoring: ["curl"])
 

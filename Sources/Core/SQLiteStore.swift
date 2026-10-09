@@ -34,20 +34,10 @@ public final class SQLiteStore: @unchecked Sendable {
         }
 
         db = handle
-        try execute(
-            """
-            CREATE TABLE IF NOT EXISTS traffic (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                ts INTEGER NOT NULL,
-                name TEXT NOT NULL,
-                pid INTEGER NOT NULL,
-                bytes_in INTEGER NOT NULL,
-                bytes_out INTEGER NOT NULL
-            );
-            """
-        )
+        try createSchema()
+        try migrateSchema()
         try execute("CREATE INDEX IF NOT EXISTS idx_traffic_ts ON traffic (ts);")
-        try execute("CREATE INDEX IF NOT EXISTS idx_traffic_name ON traffic (name);")
+        try execute("CREATE INDEX IF NOT EXISTS idx_traffic_label ON traffic (label);")
         try? execute("PRAGMA journal_mode=WAL;")
     }
 
@@ -79,7 +69,10 @@ public final class SQLiteStore: @unchecked Sendable {
         try execute("BEGIN IMMEDIATE TRANSACTION;")
         do {
             let statement = try prepare(
-                "INSERT INTO traffic (ts, name, pid, bytes_in, bytes_out) VALUES (?, ?, ?, ?, ?);"
+                """
+                INSERT INTO traffic (ts, name, pid, bytes_in, bytes_out, label, command, parent)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+                """
             )
             defer { sqlite3_finalize(statement) }
 
@@ -91,6 +84,9 @@ public final class SQLiteStore: @unchecked Sendable {
                 sqlite3_bind_int64(statement, 3, Int64(delta.pid))
                 sqlite3_bind_int64(statement, 4, Int64(bitPattern: delta.bytesIn))
                 sqlite3_bind_int64(statement, 5, Int64(bitPattern: delta.bytesOut))
+                sqlite3_bind_text(statement, 6, delta.label, -1, Self.transient)
+                sqlite3_bind_text(statement, 7, delta.command, -1, Self.transient)
+                sqlite3_bind_text(statement, 8, delta.parent, -1, Self.transient)
 
                 guard sqlite3_step(statement) == SQLITE_DONE else {
                     throw StoreError.executeFailed(lastErrorMessage())
@@ -104,7 +100,7 @@ public final class SQLiteStore: @unchecked Sendable {
         }
     }
 
-    /// 区间内的进程流量合计，按总流量降序。
+    /// 区间内的进程流量合计，按显示标识分组、总流量降序。
     /// 区间为左闭右开：[from, to)。
     public func totals(from: Int64, to: Int64) throws -> [ProcessTotal] {
         lock.lock()
@@ -112,10 +108,14 @@ public final class SQLiteStore: @unchecked Sendable {
 
         let statement = try prepare(
             """
-            SELECT name, SUM(bytes_in), SUM(bytes_out)
+            SELECT COALESCE(NULLIF(label, ''), name) AS display,
+                   MAX(parent),
+                   MAX(command),
+                   SUM(bytes_in),
+                   SUM(bytes_out)
             FROM traffic
             WHERE ts >= ? AND ts < ?
-            GROUP BY name
+            GROUP BY display
             ORDER BY SUM(bytes_in) + SUM(bytes_out) DESC;
             """
         )
@@ -127,9 +127,19 @@ public final class SQLiteStore: @unchecked Sendable {
         var result: [ProcessTotal] = []
         while sqlite3_step(statement) == SQLITE_ROW {
             let name = sqlite3_column_text(statement, 0).map { String(cString: $0) } ?? ""
-            let bytesIn = UInt64(bitPattern: sqlite3_column_int64(statement, 1))
-            let bytesOut = UInt64(bitPattern: sqlite3_column_int64(statement, 2))
-            result.append(ProcessTotal(name: name, bytesIn: bytesIn, bytesOut: bytesOut))
+            let parent = sqlite3_column_text(statement, 1).map { String(cString: $0) } ?? ""
+            let command = sqlite3_column_text(statement, 2).map { String(cString: $0) } ?? ""
+            let bytesIn = UInt64(bitPattern: sqlite3_column_int64(statement, 3))
+            let bytesOut = UInt64(bitPattern: sqlite3_column_int64(statement, 4))
+            result.append(
+                ProcessTotal(
+                    name: name,
+                    bytesIn: bytesIn,
+                    bytesOut: bytesOut,
+                    parent: parent,
+                    command: command
+                )
+            )
         }
 
         return result
@@ -147,6 +157,61 @@ public final class SQLiteStore: @unchecked Sendable {
         }
 
         return Int(sqlite3_column_int64(statement, 0))
+    }
+
+    /// 供测试与迁移检查使用的列名集合。
+    public func columnNames() throws -> Set<String> {
+        lock.lock()
+        defer { lock.unlock() }
+        return try existingColumns()
+    }
+
+    private func createSchema() throws {
+        try execute(
+            """
+            CREATE TABLE IF NOT EXISTS traffic (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                pid INTEGER NOT NULL,
+                bytes_in INTEGER NOT NULL,
+                bytes_out INTEGER NOT NULL,
+                label TEXT NOT NULL DEFAULT '',
+                command TEXT NOT NULL DEFAULT '',
+                parent TEXT NOT NULL DEFAULT ''
+            );
+            """
+        )
+    }
+
+    /// 老版本数据库没有 label/command/parent 列，这里做增量补列并把 label 回填为进程名。
+    private func migrateSchema() throws {
+        let columns = try existingColumns()
+
+        let additions: [(name: String, definition: String)] = [
+            ("label", "TEXT NOT NULL DEFAULT ''"),
+            ("command", "TEXT NOT NULL DEFAULT ''"),
+            ("parent", "TEXT NOT NULL DEFAULT ''"),
+        ]
+
+        for addition in additions where !columns.contains(addition.name) {
+            try execute("ALTER TABLE traffic ADD COLUMN \(addition.name) \(addition.definition);")
+        }
+
+        try execute("UPDATE traffic SET label = name WHERE label = '';")
+    }
+
+    private func existingColumns() throws -> Set<String> {
+        let statement = try prepare("PRAGMA table_info(traffic);")
+        defer { sqlite3_finalize(statement) }
+
+        var columns: Set<String> = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            if let text = sqlite3_column_text(statement, 1) {
+                columns.insert(String(cString: text))
+            }
+        }
+        return columns
     }
 
     private func execute(_ sql: String) throws {

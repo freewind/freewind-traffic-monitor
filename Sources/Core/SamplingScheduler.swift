@@ -19,6 +19,7 @@ public final class SamplingScheduler: @unchecked Sendable {
     private let store: SQLiteStore
     private let interval: TimeInterval
     private let collector: () throws -> [ProcessTraffic]
+    private let inspector: () throws -> [Int32: ProcessDetails]
     private let now: () -> Int64
     private let aggregator = TrafficAggregator()
     private let queue = DispatchQueue(label: "freewind-traffic-monitor.sampling")
@@ -28,11 +29,13 @@ public final class SamplingScheduler: @unchecked Sendable {
         store: SQLiteStore,
         interval: TimeInterval = 5,
         collector: @escaping () throws -> [ProcessTraffic] = NettopCollector.snapshot,
+        inspector: @escaping () throws -> [Int32: ProcessDetails] = ProcessInspector.snapshot,
         now: @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970) }
     ) {
         self.store = store
         self.interval = interval
         self.collector = collector
+        self.inspector = inspector
         self.now = now
     }
 
@@ -69,8 +72,24 @@ public final class SamplingScheduler: @unchecked Sendable {
     private func sampleOnce() {
         do {
             let snapshot = try collector()
+            let details = (try? inspector()) ?? [:]
+            let enriched = snapshot.map { item -> ProcessTraffic in
+                guard let detail = details[item.pid] else {
+                    return item
+                }
+                return ProcessTraffic(
+                    name: item.name,
+                    pid: item.pid,
+                    bytesIn: item.bytesIn,
+                    bytesOut: item.bytesOut,
+                    label: ProcessIdentity.label(name: item.name, command: detail.command),
+                    command: detail.command,
+                    parent: detail.parentName
+                )
+            }
+
             let timestamp = now()
-            let deltas = aggregator.ingest(snapshot, at: timestamp)
+            let deltas = aggregator.ingest(enriched, at: timestamp)
             try store.record(deltas)
             onSample?(Sample(timestamp: timestamp, deltas: deltas))
         } catch {

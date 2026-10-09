@@ -36,6 +36,6 @@ final class ProcessTotalSortingTests: XCTestCase {
     }
 
     func testSortableComparatorsCoverAllColumns() {
-        XCTAssertEqual(ProcessTotal.sortableComparators.count, 4)
+        XCTAssertEqual(ProcessTotal.sortableComparators.count, 5)
     }
 }

@@ -1,4 +1,5 @@
 import XCTest
+import SQLite3
 @testable import TrafficMonitorCore
 
 final class SQLiteStoreTests: XCTestCase {
@@ -62,6 +63,75 @@ final class SQLiteStoreTests: XCTestCase {
     }
 
     /// 写入真实文件并重新打开，便于用外部 sqlite3 工具核对落盘结果。
+    func testTotalsGroupByDisplayLabel() throws {
+        let store = try makeStore()
+
+        try store.record([
+            TrafficDelta(timestamp: 1, name: "node", pid: 1, bytesIn: 100, bytesOut: 0, label: "node · a.js"),
+            TrafficDelta(timestamp: 1, name: "node", pid: 2, bytesIn: 300, bytesOut: 0, label: "node · b.js"),
+        ])
+
+        let totals = try store.totals(from: 0, to: 10)
+
+        XCTAssertEqual(totals.map(\.name), ["node · b.js", "node · a.js"])
+        XCTAssertEqual(totals[0].bytesIn, 300)
+    }
+
+    func testStoresCommandAndParent() throws {
+        let store = try makeStore()
+
+        try store.record([
+            TrafficDelta(
+                timestamp: 1,
+                name: "node",
+                pid: 1,
+                bytesIn: 10,
+                bytesOut: 0,
+                label: "node · tsserver.js",
+                command: "node /x/tsserver.js",
+                parent: "zed"
+            )
+        ])
+
+        let totals = try store.totals(from: 0, to: 10)
+
+        XCTAssertEqual(totals[0].parent, "zed")
+        XCTAssertEqual(totals[0].command, "node /x/tsserver.js")
+    }
+
+    /// 老版本数据库没有 label/command/parent 列，升级后应自动补列并把 label 回填为进程名。
+    func testMigratesLegacyDatabase() throws {
+        let path = NSTemporaryDirectory() + "fw-legacy-\(UUID().uuidString).sqlite3"
+        try? FileManager.default.removeItem(atPath: path)
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        var legacyDB: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(path, &legacyDB), SQLITE_OK)
+        let legacySQL = """
+        CREATE TABLE traffic (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            pid INTEGER NOT NULL,
+            bytes_in INTEGER NOT NULL,
+            bytes_out INTEGER NOT NULL
+        );
+        INSERT INTO traffic (ts, name, pid, bytes_in, bytes_out) VALUES (100, 'node', 42, 1000, 2000);
+        """
+        XCTAssertEqual(sqlite3_exec(legacyDB, legacySQL, nil, nil, nil), SQLITE_OK)
+        sqlite3_close(legacyDB)
+
+        let store = try SQLiteStore(path: path)
+        let columns = try store.columnNames()
+        XCTAssertTrue(columns.isSuperset(of: ["label", "command", "parent"]))
+
+        let totals = try store.totals(from: 0, to: 200)
+        XCTAssertEqual(totals.count, 1)
+        XCTAssertEqual(totals[0].name, "node")
+        XCTAssertEqual(totals[0].bytesIn, 1_000)
+        XCTAssertEqual(totals[0].bytesOut, 2_000)
+    }
+
     func testWritesRealFileAndPersists() throws {
         let path = "/tmp/freewind-traffic-monitor-test.sqlite3"
         try? FileManager.default.removeItem(atPath: path)

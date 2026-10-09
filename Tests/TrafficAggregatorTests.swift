@@ -85,6 +85,29 @@ final class TrafficAggregatorTests: XCTestCase {
         XCTAssertEqual(deltas[0].bytesIn, 700)
     }
 
+    func testDifferentLabelsOfSameNameAreTrackedSeparately() {
+        let aggregator = TrafficAggregator()
+        _ = aggregator.ingest(
+            [
+                ProcessTraffic(name: "node", pid: 1, bytesIn: 100, bytesOut: 0, label: "node · a.js"),
+                ProcessTraffic(name: "node", pid: 2, bytesIn: 200, bytesOut: 0, label: "node · b.js"),
+            ],
+            at: 1
+        )
+
+        let deltas = aggregator.ingest(
+            [
+                ProcessTraffic(name: "node", pid: 1, bytesIn: 300, bytesOut: 0, label: "node · a.js"),
+                ProcessTraffic(name: "node", pid: 2, bytesIn: 500, bytesOut: 0, label: "node · b.js"),
+            ],
+            at: 2
+        )
+
+        XCTAssertEqual(deltas.count, 2)
+        XCTAssertEqual(deltas.first { $0.label == "node · a.js" }?.bytesIn, 200)
+        XCTAssertEqual(deltas.first { $0.label == "node · b.js" }?.bytesIn, 300)
+    }
+
     func testDeltaHelperHandlesMissingAndRegressedValues() {
         XCTAssertEqual(TrafficAggregator.delta(current: 500, previous: nil), 500)
         XCTAssertEqual(TrafficAggregator.delta(current: 500, previous: 200), 300)

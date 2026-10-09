@@ -63,7 +63,10 @@ struct ContentView: View {
     private var table: some View {
         Table(sortedRows, sortOrder: $sortOrder) {
             TableColumn("进程", value: \.name)
-                .width(min: 160, ideal: 220)
+                .width(min: 200, ideal: 280)
+
+            TableColumn("父进程", value: \.parent)
+                .width(min: 100, ideal: 130)
 
             TableColumn("上传", value: \.bytesIn) { row in
                 Text(ByteFormat.size(row.bytesIn))

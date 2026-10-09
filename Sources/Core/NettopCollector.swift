@@ -6,12 +6,27 @@ public struct ProcessTraffic: Equatable, Sendable {
     public let pid: Int32
     public let bytesIn: UInt64
     public let bytesOut: UInt64
+    /// 显示标识：普通进程等于 name，解释器进程会带上脚本名（如 `node · tsserver.js`）。
+    public let label: String
+    public let command: String
+    public let parent: String
 
-    public init(name: String, pid: Int32, bytesIn: UInt64, bytesOut: UInt64) {
+    public init(
+        name: String,
+        pid: Int32,
+        bytesIn: UInt64,
+        bytesOut: UInt64,
+        label: String? = nil,
+        command: String = "",
+        parent: String = ""
+    ) {
         self.name = name
         self.pid = pid
         self.bytesIn = bytesIn
         self.bytesOut = bytesOut
+        self.label = label ?? name
+        self.command = command
+        self.parent = parent
     }
 }
 

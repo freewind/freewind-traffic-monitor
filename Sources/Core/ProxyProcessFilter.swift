@@ -20,6 +20,14 @@ public enum ProxyProcessFilter {
         guard enabled else {
             return rows
         }
-        return rows.filter { !names.contains($0.name) }
+        return rows.filter { !names.contains(baseName(of: $0.name)) }
+    }
+
+    /// 显示标识形如 `node · tsserver.js`，取 `·` 之前的基本名做匹配。
+    static func baseName(of label: String) -> String {
+        guard let separator = label.range(of: "·") else {
+            return label.trimmingCharacters(in: .whitespaces)
+        }
+        return String(label[label.startIndex..<separator.lowerBound]).trimmingCharacters(in: .whitespaces)
     }
 }
