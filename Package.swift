@@ -16,7 +16,8 @@ let package = Package(
     targets: [
         .target(
             name: "TrafficMonitorCore",
-            path: "Sources/Core"
+            path: "Sources/Core",
+            linkerSettings: [.linkedLibrary("sqlite3")]
         ),
         .executableTarget(
             name: "freewind_traffic_monitor",
