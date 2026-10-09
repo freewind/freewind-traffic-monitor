@@ -14,9 +14,19 @@ let package = Package(
         ),
     ],
     targets: [
+        .target(
+            name: "TrafficMonitorCore",
+            path: "Sources/Core"
+        ),
         .executableTarget(
             name: "freewind_traffic_monitor",
-            path: "Sources"
+            dependencies: ["TrafficMonitorCore"],
+            path: "Sources/App"
+        ),
+        .testTarget(
+            name: "TrafficMonitorCoreTests",
+            dependencies: ["TrafficMonitorCore"],
+            path: "Tests"
         ),
     ]
 )
